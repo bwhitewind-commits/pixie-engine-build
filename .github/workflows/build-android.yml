@@ -96,7 +96,8 @@ jobs:
             -DGGML_OPENMP=OFF \
             -DGGML_NATIVE=OFF \
             -DCMAKE_C_FLAGS="-march=armv8.2-a+dotprod+fp16" \
-            -DCMAKE_CXX_FLAGS="-march=armv8.2-a+dotprod+fp16"
+            -DCMAKE_CXX_FLAGS="-march=armv8.2-a+dotprod+fp16" \
+            -DBUILD_SHARED_LIBS=OFF
 
       - name: Build llama-cli
         working-directory: engine
