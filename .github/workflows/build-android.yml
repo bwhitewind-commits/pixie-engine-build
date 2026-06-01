@@ -61,6 +61,8 @@ jobs:
             -DLLAMA_METAL=OFF \
             -DLLAMA_CURL=OFF \
             -DGGML_OPENMP=OFF \
+            -DGGML_NATIVE=OFF \
+            -DGGML_CPU_ARM_ARCH="armv8.2-a+dotprod+fp16" \
             -DBUILD_SHARED_LIBS=OFF
 
       - name: Build
