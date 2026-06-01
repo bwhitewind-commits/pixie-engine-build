@@ -62,7 +62,8 @@ jobs:
             -DLLAMA_CURL=OFF \
             -DGGML_OPENMP=OFF \
             -DGGML_NATIVE=OFF \
-            -DGGML_CPU_ARM_ARCH="armv8.2-a+dotprod+fp16" \
+            -DCMAKE_C_FLAGS="-march=armv8.2-a+dotprod+fp16" \
+            -DCMAKE_CXX_FLAGS="-march=armv8.2-a+dotprod+fp16" \
             -DBUILD_SHARED_LIBS=OFF
 
       - name: Build
@@ -74,6 +75,19 @@ jobs:
           mkdir -p out
           find engine/build -name "*.so" -exec cp -v {} out/ \;
           echo "--- collected ---"; ls -la out
+
+      - name: Verify ARM dotprod kernels actually compiled in
+        run: |
+          # The Pixel 7's big speedup for quantized matmul. If this is 0, the arch
+          # flags didn't reach ggml's kernels and the engine will run ~15x too slow.
+          OBJDUMP="$ANDROID_NDK_LATEST_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-objdump"
+          SO=$(ls out/libgodot_llm*.so | head -1)
+          N=$("$OBJDUMP" -d "$SO" | grep -cwE "sdot|udot")
+          echo "dotprod (sdot/udot) instruction count: $N"
+          if [ "$N" -lt 1 ]; then
+            echo "::error::No dotprod instructions in $SO — ARM arch flags did not take effect"; exit 1
+          fi
+          echo "✅ dotprod kernels present ($N sdot/udot sites)"
 
       - name: Upload the engine .so
         uses: actions/upload-artifact@v4
