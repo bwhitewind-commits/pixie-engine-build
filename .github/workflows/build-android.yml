@@ -166,3 +166,80 @@ jobs:
             out/llama-cli
             out/llama-cli-modern
           if-no-files-found: error
+
+  # ══════════════════════════════════════════════════════════════════════════
+  # MODERN ENGINE — the real ship fix. The bare-cli A/B proved clang-21 (NDK r29)
+  # runs HER Q8 at ~17 tok/s vs ~0.8 on r23/clang-12 (21x). The slow `build` job
+  # above is chained to r23 only because godot-cpp's *SCons* path hardcodes r23.
+  # But GDLlama's CMakeLists does `add_subdirectory(godot-cpp)`, so CMake builds
+  # godot-cpp with OUR toolchain — no SCons, no r23 gate. So we build the WHOLE
+  # engine .so with r29/clang-21 here. godot-cpp is UNCHANGED (same pinned commit)
+  # => zero GDLlama API-drift risk; the only variable is the compiler. The slow
+  # `build` job is left intact as a known-good fallback.
+  # ══════════════════════════════════════════════════════════════════════════
+  build-modern-engine:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout this repo
+        uses: actions/checkout@v4
+
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake ninja-build git python3
+
+      - name: Clone the GDLlama engine source (+ submodules)
+        run: |
+          git clone --recursive https://github.com/xarillian/GDLlama.git engine
+          cd engine
+          git submodule update --init --recursive
+          echo "--- godot-cpp commit (must be the pinned e4b7c25 — unchanged) ---"
+          git -C godot-cpp rev-parse HEAD
+
+      - name: Show the modern toolchain
+        run: |
+          echo "modern NDK: $ANDROID_NDK_LATEST_HOME"
+          "$ANDROID_NDK_LATEST_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/clang" --version | head -1
+
+      - name: Configure WHOLE engine with the LATEST NDK (CMake builds godot-cpp too)
+        working-directory: engine
+        run: |
+          cmake -B build -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK_LATEST_HOME/build/cmake/android.toolchain.cmake" \
+            -DANDROID_ABI=arm64-v8a \
+            -DANDROID_PLATFORM=android-23 \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_TESTING=OFF \
+            -DLLAMA_VULKAN=OFF \
+            -DLLAMA_METAL=OFF \
+            -DLLAMA_CURL=OFF \
+            -DGGML_OPENMP=OFF \
+            -DGGML_NATIVE=OFF \
+            -DCMAKE_C_FLAGS="-march=armv8.2-a+dotprod+fp16" \
+            -DCMAKE_CXX_FLAGS="-march=armv8.2-a+dotprod+fp16" \
+            -DBUILD_SHARED_LIBS=OFF
+
+      - name: Build
+        working-directory: engine
+        run: ninja -C build -j"$(nproc)"
+
+      - name: Collect + verify dotprod
+        run: |
+          mkdir -p out
+          find engine/build -name "libgodot_llm*.so" -exec cp -v {} out/ \;
+          echo "--- collected ---"; ls -la out
+          OBJDUMP="$ANDROID_NDK_LATEST_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-objdump"
+          SO=$(ls out/libgodot_llm*.so | head -1)
+          N=$("$OBJDUMP" -d "$SO" | grep -cwE "sdot|udot")
+          echo "dotprod (sdot/udot) instruction count: $N"
+          if [ "$N" -lt 1 ]; then
+            echo "::error::No dotprod instructions in $SO"; exit 1
+          fi
+          echo "✅ dotprod present ($N sites); built with $("$ANDROID_NDK_LATEST_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/clang" --version | head -1)"
+
+      - name: Upload the MODERN engine .so
+        uses: actions/upload-artifact@v4
+        with:
+          name: gdllama-android-arm64-modern
+          path: out/libgodot_llm*.so
+          if-no-files-found: error
