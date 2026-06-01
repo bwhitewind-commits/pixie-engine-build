@@ -76,6 +76,38 @@ jobs:
           find engine/build -name "*.so" -exec cp -v {} out/ \;
           echo "--- collected ---"; ls -la out
 
+      # ── Speed-gap A/B probe (Pillar 1) ───────────────────────────────────────
+      # Build a BARE llama-cli from the SAME engine/llama.cpp submodule, with the
+      # SAME -march flags and the SAME NDK as the engine above. The only thing that
+      # differs from our in-process engine is llama.cpp's own threadpool + main loop
+      # vs our GDLlama/Godot async wrapper. Running this on the Pixel 7 isolates the
+      # ~8x decode gap: if llama-cli also crawls -> it's our build/codegen; if it
+      # hits ~6 tok/s -> the bottleneck is the Godot threadpool/async wrapper.
+      - name: Configure bare llama-cli (same source, same arch flags, static)
+        working-directory: engine
+        run: |
+          cmake -B build-cli -G Ninja llama.cpp \
+            -DCMAKE_TOOLCHAIN_FILE="$ANDROID_HOME/ndk/23.2.8568313/build/cmake/android.toolchain.cmake" \
+            -DANDROID_ABI=arm64-v8a \
+            -DANDROID_PLATFORM=android-23 \
+            -DANDROID_STL=c++_static \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DLLAMA_CURL=OFF \
+            -DGGML_OPENMP=OFF \
+            -DGGML_NATIVE=OFF \
+            -DCMAKE_C_FLAGS="-march=armv8.2-a+dotprod+fp16" \
+            -DCMAKE_CXX_FLAGS="-march=armv8.2-a+dotprod+fp16"
+
+      - name: Build llama-cli
+        working-directory: engine
+        run: ninja -C build-cli llama-cli
+
+      - name: Collect llama-cli
+        run: |
+          find engine/build-cli -name "llama-cli" -type f -exec cp -v {} out/ \;
+          echo "--- collected (with cli) ---"; ls -la out
+          file out/llama-cli || true
+
       - name: Verify ARM dotprod kernels actually compiled in
         run: |
           # The Pixel 7's big speedup for quantized matmul. If this is 0, the arch
@@ -93,5 +125,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: gdllama-android-arm64
-          path: out/*.so
+          path: |
+            out/*.so
+            out/llama-cli
           if-no-files-found: error
